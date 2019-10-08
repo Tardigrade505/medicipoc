@@ -1,0 +1,272 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: API Gateway, Lambda, and RDS.
+
+Resources:
+  MyApiGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt UsersEndpointLambda.Arn
+                  - !GetAtt CreateDatabasesLambda.Arn
+
+  MyApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${AWS::StackName}-apiGateway"
+      Description: A description
+      FailOnWarnings: true
+      Body:
+        swagger: "2.0"
+        info:
+          version: "0.0"
+          title: "POC API"
+        paths:
+          /user:
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UsersEndpointLambda.Arn}/invocations"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+                responses:
+                  default:
+                    statusCode: "201"
+              description: Creates a new user
+              parameters:
+              - in: "body"
+                name: "body"
+                description: "User to be created"
+                required: true
+                schema:
+                  $ref: "#/definitions/User"
+              responses:
+                "201":
+                  description: Your new user was created.
+                  schema:
+                    $ref: "#/definitions/CreateUserResponse"
+                "400":
+                  description: A bad request was received. Check your payload.
+          /user/{user_handle}:
+            get:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UsersEndpointLambda.Arn}/invocations"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+                responses:
+                  default:
+                    statusCode: "200"
+              description: Describes a user with the given handle
+              parameters:
+              - name: user_handle
+                in: path
+                type: string
+                required: true
+                description: The handle of the user to describe.
+              responses:
+                "200":
+                  description: Successfully described the user
+                  schema:
+                    $ref: "#/definitions/UserDescription"
+          /database:
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateDatabasesLambda.Arn}/invocations"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+                responses:
+                  default:
+                    statusCode: "201"
+              description: Creates the RDS database and populates it with tables
+              responses:
+                "201":
+                  description: A success message for creating the database
+                  schema:
+                    $ref: "#/definitions/CreateDatabaseResponse"
+                "500":
+                  description: A success message for creating the database
+                  schema:
+                    $ref: "#/definitions/CreateDatabaseResponse"
+
+        definitions:
+          User:
+            type: "object"
+            required:
+            - "handle"
+            - "username"
+            - "name"
+            - "password"
+            - "email"
+            - "phone"
+            - "address"
+            - "dob"
+            - "ssn"
+            properties:
+              handle:
+                type: "string"
+              username:
+                type: "string"
+              name:
+                type: "string"
+              password:
+                type: "string"
+              email:
+                type: "string"
+              phone:
+                type: "string"
+              address:
+                type: "string"
+              dob:
+                type: "string"
+              ssn:
+                type: "string"
+          CreateUserResponse:
+            type: "object"
+            properties:
+              user_handle:
+                type: "string"
+          CreateDatabaseResponse:
+            type: "object"
+          UserDescription:
+            type: "object"
+            properties:
+              handle:
+                type: "string"
+              username:
+                type: "string"
+              name:
+                type: "string"
+              password:
+                type: "string"
+              email:
+                type: "string"
+              phone:
+                type: "string"
+              address:
+                type: "string"
+              dob:
+                type: "string"
+              ssn:
+                type: "string"
+
+  MyApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref MyApiGateway
+      StageName: prod
+
+  CreateDatabasesLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt RDSLambdaRole.Arn  # TODO
+      Handler: create_databases.handler
+      Runtime: python3.6
+      Environment:
+        Variables:
+          ENDPOINT: !GetAtt RDS.Endpoint.Address
+          USERNAME: MyName
+          PASSWORD: MyPassword
+      Code:
+        S3Bucket: medici-storage
+        S3Key: endpoints-python.zip
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-4dd32f2c
+        SubnetIds:
+          - subnet-5f434537
+          - subnet-6a057910
+          - subnet-b37fdbff
+
+  UsersEndpointLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt RDSLambdaRole.Arn  # TODO
+      Handler: users.handler
+      Runtime: python3.6
+      Environment:
+        Variables:
+          ENDPOINT: !GetAtt RDS.Endpoint.Address
+          USERNAME: MyName
+          PASSWORD: MyPassword
+      Code:
+        S3Bucket: medici-storage
+        S3Key: endpoints-python.zip
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-4dd32f2c
+        SubnetIds:
+          - subnet-5f434537
+          - subnet-6a057910
+          - subnet-b37fdbff
+
+  RDSLambdaRole:  # -> AppAPIRole
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref BaseLambdaExecutionPolicy
+      Policies:
+        - PolicyName: rdsFullAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:*
+                Resource: "*"
+
+  # Policy required for all lambda function roles.
+  BaseLambdaExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Base permissions needed by all lambda functions.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - ec2:CreateNetworkInterface
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DeleteNetworkInterface
+              - rds:*
+            Resource: "*"
+
+  RDS:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: '5'
+      DBInstanceClass: db.t2.micro
+      Engine: MySQL
+      MasterUsername: MyName
+      MasterUserPassword: MyPassword
+    DeletionPolicy: Snapshot

@@ -1,0 +1,267 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: API Gateway, Lambda, and RDS.
+
+Resources:
+  MyApiGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt AccountLambda.Arn
+                  #- !GetAtt OneAccountLambda.Arn
+                  #- !GetAtt BudgetLambda.Arn
+
+  MyApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${AWS::StackName}-apiGateway"
+      Description: A description
+      FailOnWarnings: true
+      Body:
+        swagger: "2.0"
+        info:
+          version: "0.0"
+          title: "POC API"
+        paths:
+          /account:
+            get:
+              description: Gets a list of all the accounts
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AccountLambda.Arn}/invocations"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+                responses:
+                  default:
+                    statusCode: "200"
+              operationId: getAccounts
+              responses:
+                "200":
+                  description: A list of all accounts.
+                  schema:
+                    $ref: "#/definitions/AccountList"
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AccountLambda.Arn}/invocations"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+                responses:
+                  default:
+                    statusCode: "201"
+              description: Creates a new account
+              operationId: postAccount
+              parameters:
+              - in: "body"
+                name: "body"
+                description: "Account to be created"
+                required: true
+                schema:
+                  $ref: "#/definitions/Account"
+              responses:
+                "201":
+                  description: Your new account has been created.
+                  schema:
+                    $ref: "#/definitions/CreateAccountResponse"
+                "400":
+                  description: A bad request was received. Check your payload.
+
+        definitions:
+          Account:
+            type: "object"
+            required:
+            - "name"
+            properties:
+              name:
+                type: "string"
+              starting_balance:
+                type: "number"
+              monthly_income:
+                type: "number"
+          CreateAccountResponse:
+            type: "object"
+            properties:
+              account_id:
+                type: "string"
+          AccountList:
+            type: "object"
+            properties:
+              accounts:
+                type: "array"
+                items:
+                  type: "string"
+
+  MyApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref MyApiGateway
+      StageName: prod
+
+  AccountLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt AccountLambdaRole.Arn  # TODO
+      Handler: app.handler
+      Runtime: python3.6
+      Environment:
+        Variables:
+          ENDPOINT: !GetAtt MyDB.Endpoint.Address
+          USERNAME: MyName
+          PASSWORD: MyPassword
+          DATABASE_NAME: !Ref MyDB
+      Code:
+        S3Bucket: medici-storage
+        S3Key: account-python.zip
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-4dd32f2c
+        SubnetIds:
+          - subnet-5f434537
+          - subnet-6a057910
+          - subnet-b37fdbff
+
+  CreateDatabasesLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt AccountLambdaRole.Arn  # TODO
+      Handler: create_databases.handler
+      Runtime: python3.6
+      Environment:
+        Variables:
+          ENDPOINT: !GetAtt MyDB.Endpoint.Address
+          USERNAME: MyName
+          PASSWORD: MyPassword
+      Code:
+        S3Bucket: medici-storage
+        S3Key: endpoints-python.zip
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-4dd32f2c
+        SubnetIds:
+          - subnet-5f434537
+          - subnet-6a057910
+          - subnet-b37fdbff
+
+  UsersEndpointLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt AccountLambdaRole.Arn  # TODO
+      Handler: users.handler    
+      Runtime: python3.6
+      Environment:
+        Variables:
+          ENDPOINT: !GetAtt MyDB.Endpoint.Address
+          USERNAME: MyName
+          PASSWORD: MyPassword
+      Code:
+        S3Bucket: medici-storage
+        S3Key: endpoints-python.zip
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-4dd32f2c
+        SubnetIds:
+          - subnet-5f434537
+          - subnet-6a057910
+          - subnet-b37fdbff
+
+  AccountLambdaRole:  # -> AppAPIRole
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref BaseLambdaExecutionPolicy
+      Policies:
+        - PolicyName: getAccount
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+        - PolicyName: putAccount
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+        - PolicyName: scanAccount
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+
+  # Policy required for all lambda function roles.
+  BaseLambdaExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Base permissions needed by all lambda functions.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - ec2:CreateNetworkInterface
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DeleteNetworkInterface
+              - rds:*
+            Resource: "*"
+
+  AccountTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - AttributeName: account_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: account_id
+          KeyType: HASH
+
+
+  MyDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      # DBSecurityGroups:
+      # - Ref: MyDbSecurityByEC2SecurityGroup
+      # - Ref: MyDbSecurityByCIDRIPGroup
+      AllocatedStorage: '5'
+      DBInstanceClass: db.m4.large
+      Engine: MySQL
+      MasterUsername: MyName
+      MasterUserPassword: MyPassword
+    DeletionPolicy: Snapshot

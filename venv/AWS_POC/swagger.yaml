@@ -1,0 +1,185 @@
+swagger: "2.0"
+info:
+  version: "0.0"
+  title: "POC API"
+paths:
+  /account:
+    get:
+      description: Gets a list of all the accounts
+      responses:
+        200:
+          description: A list of all accounts.
+          schema:
+            $ref: "#/definitions/AccountList"
+    post:
+      description: Creates a new account
+      parameters:
+      - in: "body"
+        name: "body"
+        description: "Account to be created"
+        required: true
+        schema:
+          $ref: "#/definitions/Account"
+      responses:
+        "201":
+          description: Your new account was created.
+          schema:
+            $ref: "#/definitions/CreateAccountResponse"
+        400:
+          description: A bad request was received. Check your payload.
+
+  /account/{account_id}:   
+    get:
+      description: Gets a description of an account based on account ID
+      parameters:
+        - name: account_id
+          in: path
+          type: string
+          required: true
+          description: The ID of the account to describe.
+      responses:
+        200:
+          description: Successfully described account
+          schema:
+            $ref: "#/definitions/AccountDescription"
+            
+  /account/{account_id}/budget:   
+    get:
+      description: Lists all the budgets belonging to an account.
+      parameters:
+        - name: account_id
+          in: path
+          type: string
+          required: true
+          description: The ID of the account of the budgets.
+      responses:
+        200:
+          description: Successfully listed budgets
+          schema:
+            $ref: "#/definitions/BudgetList"
+        400:
+          description: Bad request. Did you include account_id as a path parameter?
+        404:
+          description: An account with that ID does not exist.
+    post:
+      description: Create a new budget for the account.
+      parameters:
+      - name: account_id
+        in: path
+        type: string
+        required: true
+        description: The ID of the account in which to create a budget
+      - in: "body"
+        name: "body"
+        description: "Budget to be created"
+        required: true
+        schema:
+          $ref: "#/definitions/Budget"  
+      responses:
+        201:
+          description: Your new account was created.
+          schema:
+            $ref: "#/definitions/CreateBudgetResponse"
+        400:
+          description: A bad request was received. Check your payload.
+          
+          
+          
+definitions:
+  Account:
+    type: "object"
+    required:
+    - "name"
+    properties:
+      name:
+        type: "string"
+        example: "Bob Law"
+      starting_balance:
+        type: "number"
+        example: "15608.71"
+      monthly_income:
+        type: "number"
+        example: "3324.67"
+  CreateAccountResponse:
+    type: "object"
+    properties:
+      account_id:
+        type: "string"
+        example: "dk3kgja8dfjak"
+  AccountList:
+    type: "object"
+    properties:
+      accounts:
+        type: "array"
+        items:
+          type: "string"
+          example: "dk3kgja8dfjak"
+  AccountDescription:
+    type: "object"
+    properties:
+      account_id:
+        type: "string"
+        example: "dk3kgja8dfjak"
+      name:
+        type: "string"
+        example: "Bob Law"
+      starting_balance:
+        type: "number"
+        example: "15608.71"        
+      monthly_income:
+        type: "number"
+        example: "3324.67"
+  BudgetList:
+    type: "array"
+    items:
+      $ref: "#/definitions/BudgetDescription"
+  Budget:
+    type: "object"
+    properties:
+      name:
+        type: "string"
+        example: "Home Improvement"
+      budget_value:
+        type: "number"
+        example: "350.00"   
+      actual_value:
+        type: "number"
+        example: "221.37"
+      category:
+        type: "string"
+        example: "Home"
+      expense_type:
+        type: "string"
+        example: "fixed"
+      due_date:
+        type: "string"
+        example: "03-02-2019"        
+  BudgetDescription:
+    type: "object"
+    properties:
+      budget_id:
+        type: "string"
+        example: "fjdkafladkfj"
+      name:
+        type: "string"
+        example: "Home Improvement"
+      budget_value:
+        type: "number"
+        example: "350.00"   
+      actual_value:
+        type: "number"
+        example: "221.37"
+      due_date:
+        type: "string"
+        example: "03-02-2019"        
+  CreateBudgetResponse:
+    type: "object"
+    properties:
+      budget_id:
+        type: "string"
+        example: "fjdkafladkfj"        
+          
+         
+        
+      
+      

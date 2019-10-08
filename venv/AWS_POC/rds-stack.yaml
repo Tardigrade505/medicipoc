@@ -1,0 +1,283 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: API Gateway, Amazon SQS, Lambda, and RDS.
+
+Resources:
+
+  MyQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      DelaySeconds: 0
+      KmsDataKeyReusePeriodSeconds: 86400
+
+  # Policy required for all lambda function roles.
+  BaseAPIGatewayExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Base permissions needed by all API Gateway roles.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sqs:*
+            Resource: "*"
+
+  MyApiGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref BaseAPIGatewayExecutionPolicy
+      Policies:
+        - PolicyName: InvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt AccountLambda.Arn
+                  #- !GetAtt OneAccountLambda.Arn
+                  #- !GetAtt BudgetLambda.Arn
+                  # - !GetAtt MyQueue.Arn
+        - PolicyName: InvokeSQS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:*
+                Resource: "*"
+                  #- !GetAtt OneAccountLambda.Arn
+                  #- !GetAtt BudgetLambda.Arn
+                  # - !GetAtt MyQueue.Arn
+
+  MyApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${AWS::StackName}-apiGateway"
+      Description: A description
+      FailOnWarnings: true
+      Body:
+        swagger: "2.0"
+        info:
+          version: "0.0"
+          title: "POC API"
+        paths:
+          /account:
+            get:
+              description: Gets a list of all the accounts
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AccountLambda.Arn}/invocations"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws
+                responses:
+                  default:
+                    statusCode: "200"
+              operationId: getAccounts
+              responses:
+                "200":
+                  description: A list of all accounts.
+                  schema:
+                    $ref: "#/definitions/AccountList"
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "${MyQueue}?Action=SendMessage&Version=2012-11-05&MessageBody=data"
+                # uri: !Sub "arn:aws:apigateway:${AWS::Region}:sqs:action/SendMessage"
+                # RequestTemplates:
+                #   application/json: Action=SendMessage
+                RequestParameters:
+                  integration.request.querystring.queueUrl: !Ref MyQueue
+                  integration.request.querystring.version: "2012-11-05"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: GET
+                type: http
+                responses:
+                  default:
+                    statusCode: "200"
+              description: Creates a new account
+              operationId: postAccount
+              parameters:
+              - in: "body"
+                name: "body"
+                description: "Account to be created"
+                required: true
+                schema:
+                  $ref: "#/definitions/Account"
+              responses:
+                "200":
+                  description: Your new account is being created.
+                  schema:
+                    $ref: "#/definitions/CreateAccountResponse"
+                "400":
+                  description: A bad request was received. Check your payload.
+
+        definitions:
+          Account:
+            type: "object"
+            required:
+            - "name"
+            properties:
+              name:
+                type: "string"
+              starting_balance:
+                type: "number"
+              monthly_income:
+                type: "number"
+          CreateAccountResponse:
+            type: "object"
+            properties:
+              account_id:
+                type: "string"
+          AccountList:
+            type: "object"
+            properties:
+              accounts:
+                type: "array"
+                items:
+                  type: "string"
+
+  MyApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref MyApiGateway
+      StageName: prod
+
+  MyQueueLamdaListener:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      Enabled: true
+      EventSourceArn: !GetAtt MyQueue.Arn
+      FunctionName: !GetAtt AccountLambda.Arn
+
+  AccountLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt AccountLambdaRole.Arn  # TODO
+      Handler: account/accountNodejs.handleHttpRequest
+      Runtime: nodejs8.10
+      Environment:
+        Variables:
+          ACCOUNT_DB: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+      Code:
+        S3Bucket: medici-storage
+        S3Key: account.zip
+
+  AccountLambdaRole:  # -> AppAPIRole
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref BaseLambdaExecutionPolicy
+      Policies:
+        - PolicyName: getAccount
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+        - PolicyName: putAccount
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+        - PolicyName: scanAccount
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+
+  # Policy required for all lambda function roles.
+  BaseLambdaExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Base permissions needed by all lambda functions.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - ec2:CreateNetworkInterface
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DeleteNetworkInterface
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:GetQueueAttributes
+            Resource: "*"
+
+  # Policy required for all lambda function roles.
+  BaseAPIGatewayExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Base permissions needed by all API Gateway roles.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sqs:*
+            Resource: "*"
+
+
+  AccountTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - AttributeName: account_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: account_id
+          KeyType: HASH
+
+
+
+
+Outputs:
+  QueueURL:
+    Description: "URL of new Amazon SQS Queue"
+    Value:
+      Ref: "MyQueue"
+  QueueARN:
+    Description: "ARN of new AmazonSQS Queue"
+    Value:
+      Fn::GetAtt:
+        - "MyQueue"
+        - "Arn"
+  QueueName:
+    Description: "Name of new Amazon SQS Queue"
+    Value:
+      Fn::GetAtt:
+        - "MyQueue"
+        - "QueueName"

@@ -1,0 +1,420 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: API Gateway, Lambda, and Dynamo.
+
+Resources:
+  # Policy required for all lambda function roles.
+  BaseLambdaExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Base permissions needed by all lambda functions.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - ec2:CreateNetworkInterface
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DeleteNetworkInterface
+            Resource: "*"
+
+  AccountTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - AttributeName: account_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: account_id
+          KeyType: HASH
+
+  BudgetTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+      - AttributeName: account_id
+        AttributeType: S
+      - AttributeName: budget_id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: account_id
+        KeyType: HASH
+      - AttributeName: budget_id
+        KeyType: RANGE
+
+  # FIXME How to hook up custom domain?
+  MyApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${AWS::StackName}-apiGateway"
+      Description: A description
+      FailOnWarnings: true
+      Body:
+        swagger: "2.0"
+        info:
+          version: "0.0"
+          title: "POC API"
+        paths:
+          /account:
+            get:
+              description: Gets a list of all the accounts
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:sqs:action/SendMessage"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws
+              operationId: getAccounts
+              responses:
+                "200":
+                  description: A list of all accounts.
+                  schema:
+                    $ref: "#/definitions/AccountList"
+            post:
+              description: Creates a new account
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:sqs:action/SendMessage"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws
+              operationId: postAccount
+              parameters:
+              - in: "body"
+                name: "body"
+                description: "Account to be created"
+                required: true
+                schema:
+                  $ref: "#/definitions/Account"
+              responses:
+                "201":
+                  description: Your new account was created.
+                  schema:
+                    $ref: "#/definitions/CreateAccountResponse"
+                "400":
+                  description: A bad request was received. Check your payload.
+
+          /account/{account_id}:
+            get:
+              description: Gets a description of an account based on account ID
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:sqs:action/SendMessage"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws
+              operationId: getOneAccount
+              parameters:
+              - name: account_id
+                in: path
+                type: string
+                required: true
+                description: The ID of the account to describe.
+              responses:
+                "200":
+                  description: Successfully described account
+                  schema:
+                    $ref: "#/definitions/AccountDescription"
+
+          /account/{account_id}/budget:
+            get:
+              description: Lists all the budgets belonging to an account.
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:sqs:action/SendMessage"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws
+              operationId: getBudgets
+              parameters:
+              - name: account_id
+                in: path
+                type: string
+                required: true
+                description: The ID of the account of the budgets.
+              responses:
+                "200":
+                  description: Successfully listed budgets
+                  schema:
+                    $ref: "#/definitions/BudgetList"
+                "400":
+                  description: Bad request. Did you include account_id as a path parameter?
+                "404":
+                  description: An account with that ID does not exist.
+            post:
+              description: Create a new budget for the account.
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:sqs:action/SendMessage"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws
+              operationId: postBudget
+              parameters:
+              - name: account_id
+                in: path
+                type: string
+                required: true
+                description: The ID of the account in which to create a budget
+              - in: "body"
+                name: "body"
+                description: "Budget to be created"
+                required: true
+                schema:
+                  $ref: "#/definitions/Budget"
+              responses:
+                "201":
+                  description: Your new account was created.
+                  schema:
+                    $ref: "#/definitions/CreateBudgetResponse"
+                "400":
+                  description: A bad request was received. Check your payload.
+
+
+
+        definitions:
+          Account:
+            type: "object"
+            required:
+            - "name"
+            properties:
+              name:
+                type: "string"
+              starting_balance:
+                type: "number"
+              monthly_income:
+                type: "number"
+          CreateAccountResponse:
+            type: "object"
+            properties:
+              account_id:
+                type: "string"
+          AccountList:
+            type: "object"
+            properties:
+              accounts:
+                type: "array"
+                items:
+                  type: "string"
+          AccountDescription:
+            type: "object"
+            properties:
+              account_id:
+                type: "string"
+              name:
+                type: "string"
+              starting_balance:
+                type: "number"
+              monthly_income:
+                type: "number"
+          BudgetList:
+            type: "object"
+            properties:
+              budgets:
+                type: "array"
+                items:
+                  $ref: "#/definitions/BudgetDescription"
+          Budget:
+            type: "object"
+            properties:
+              name:
+                type: "string"
+              budget_value:
+                type: "number"
+              actual_value:
+                type: "number"
+              category:
+                type: "string"
+              expense_type:
+                type: "string"
+              due_date:
+                type: "string"
+          BudgetDescription:
+            type: "object"
+            properties:
+              budget_id:
+                type: "string"
+              name:
+                type: "string"
+              budget_value:
+                type: "number"
+              actual_value:
+                type: "number"
+              due_date:
+                type: "string"
+          CreateBudgetResponse:
+            type: "object"
+            properties:
+              budget_id:
+                type: "string"
+
+
+
+  MyApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref MyApiGateway
+      StageName: prod
+
+  MyApiGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt AccountLambda.Arn
+                  - !GetAtt OneAccountLambda.Arn
+                  - !GetAtt BudgetLambda.Arn
+
+  AccountLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt AccountLambdaRole.Arn  # TODO
+      Handler: index.handleHttpRequest
+      Runtime: nodejs8.10
+      Environment:
+        Variables:
+          ACCOUNT_DB: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+      Code:
+        ZipFile: |
+          exports.handlers = function(event, context) {}
+
+
+  AccountLambdaRole:  # -> AppAPIRole
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref BaseLambdaExecutionPolicy
+      Policies:
+        - PolicyName: getAccount
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+        - PolicyName: putAccount
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+        - PolicyName: scanAccount
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+
+  BudgetLambdaRole:  # -> AppAPIRole
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - !Ref BaseLambdaExecutionPolicy
+      Policies:
+      - PolicyName: getBudget
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:GetItem
+            Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${BudgetTable}"
+      - PolicyName: putBudget
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:PutItem
+            Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${BudgetTable}"
+      - PolicyName: scanBudget
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:Scan
+            Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${BudgetTable}"
+      - PolicyName: queryBudget
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:Query
+            Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${BudgetTable}"
+
+  OneAccountLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt AccountLambdaRole.Arn  # TODO
+      Handler: index.handleHttpRequest
+      Runtime: nodejs8.10
+      Environment:
+        Variables:
+          ACCOUNT_DB: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${AccountTable}"
+      Code:
+        ZipFile: |
+          exports.handlers = function(event, context) {}
+
+  BudgetLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt BudgetLambdaRole.Arn  # TODO
+      Handler: index.handleHttpRequest
+      Runtime: nodejs8.10
+      Environment:
+        Variables:
+          BUDGET_DB: !Sub "arn:aws:dynamodb:${AWS::Region}:*:table/${BudgetTable}"
+      Code:
+        ZipFile: |
+          exports.handlers = function(event, context) {}
+
+  MyQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      DelaySeconds: 0
+      KmsDataKeyReusePeriodSeconds: 86400          
