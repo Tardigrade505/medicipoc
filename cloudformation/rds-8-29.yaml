@@ -87,6 +87,59 @@ Resources:
                   description: Successfully described the user
                   schema:
                     $ref: "#/definitions/UserDescription"
+          /user/{user_handle}/budgets:
+            get:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BudgetsEndpointLambda.Arn}/invocations"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+                responses:
+                  default:
+                    statusCode: "200"
+              description: Gets all the user's budget categories
+              parameters:
+              - name: user_handle
+                in: path
+                type: string
+                required: true
+                description: The handle of the user.
+              responses:
+                "200":
+                  description: Successfully got all the user's budgets
+                  schema:
+                    $ref: "#/definitions/BudgetList"  
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BudgetsEndpointLambda.Arn}/invocations"
+                credentials: !GetAtt MyApiGatewayRole.Arn
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+                responses:
+                  default:
+                    statusCode: "201"
+              description: Creates a new budget
+              parameters:
+              - name: user_handle
+                in: path
+                type: string
+                required: true
+                description: The handle of the user.
+              - in: "body"
+                name: "body"
+                description: "Budget to be created"
+                required: true
+                schema:
+                  $ref: "#/definitions/Budget"
+              responses:
+                "201":
+                  description: Your new budget was created.
+                  schema:
+                    $ref: "#/definitions/CreateBudgetResponse"
+                "400":
+                  description: A bad request was received. Check your payload.               
           /database:
             post:
               x-amazon-apigateway-integration:
@@ -169,6 +222,29 @@ Resources:
                 type: "string"
               ssn:
                 type: "string"
+          Budget:
+            type: "object"
+            properties:
+              name:
+                type: "string"
+              amount:
+                type: "integer"
+              mc_codes:
+                type: "array"
+                items:
+                  type: "integer"  
+          BudgetList:
+            type: "object"
+            properties:
+              budgets:
+                type: "array"
+                items: 
+                  $ref: "#/definitions/Budget"
+          CreateBudgetResponse:
+            type: "object"
+            properties:
+              user_handle:
+                type: "string"              
 
   MyApiGatewayDeployment:
     Type: AWS::ApiGateway::Deployment
@@ -220,6 +296,28 @@ Resources:
           - subnet-6a057910
           - subnet-b37fdbff
 
+  BudgetsEndpointLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt RDSLambdaRole.Arn  # TODO change to nosql
+      Handler: users.handler # TODO change to nosql
+      Runtime: python3.6
+      Environment:
+        Variables:
+          ENDPOINT: !GetAtt RDS.Endpoint.Address # TODO change to nosql
+          USERNAME: MyName # TODO change to nosql
+          PASSWORD: MyPassword # TODO change to nosql
+      Code:
+        S3Bucket: medici-storage
+        S3Key: endpoints-python.zip # TODO change to nosql
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-4dd32f2c
+        SubnetIds:
+          - subnet-5f434537
+          - subnet-6a057910
+          - subnet-b37fdbff        
+
   RDSLambdaRole:  # -> AppAPIRole
     Type: AWS::IAM::Role
     Properties:
@@ -270,3 +368,19 @@ Resources:
       MasterUsername: MyName
       MasterUserPassword: MyPassword
     DeletionPolicy: Snapshot
+
+  BudgetTable:
+    Type: AWS::DynamoDB::Table
+    Properties: 
+      AttributeDefinitions: 
+        - AttributeName: "user_handle"
+          AttributeType: "S"
+        - AttributeName: "name"
+          AttributeType: "S"
+      BillingMode: "PAY_PER_REQUEST" 
+      KeySchema: 
+        - AttributeName: "user_handle"
+          KeyType: "HASH"
+        - AttributeName: "name"
+          KeyType: "RANGE"
+      TableName: "budget_table"
